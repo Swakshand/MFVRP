@@ -19,7 +19,7 @@ from alns.accept import HillClimbing
 from alns.stop import MaxIterations
 from alns.select import RouletteWheel
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
+%matplotlib inline
 SEED = 1234
 
 n_customer_ev = int(input("Enter the number of residential customers: "))
@@ -34,6 +34,14 @@ ev_max_tour = float(input("Enter the maximum tour length for EVs: "))
 cv_max_tour = float(input("Enter the maximum tour length for CVs: "))
 
 data = {}
+def save_solution_to_file(solution, total_cost, filename="output.txt"):
+    with open(filename, "w") as file:
+        file.write(f"{total_cost:.6f}\n")
+        for route in solution.routes:
+            if len(route) > 2:
+                file.write(" ".join(map(str, route)) + "\n")
+            else:
+                file.write("0 0\n")
 
 def plot_routes(solution):
     plt.figure(figsize=(10, 10))
@@ -45,7 +53,6 @@ def plot_routes(solution):
         for customer in route:
             x, y = data["customers"][customer][0], data["customers"][customer][1]
             plt.text(x, y, str(customer), fontsize=9, ha='right')
-
     plt.plot(data["customers"][0][0], data["customers"][0][1], 'ks', markersize=10, label="Depot")
     plt.xlabel("X coordinate")
     plt.ylabel("Y coordinate")
@@ -90,6 +97,16 @@ def calculate_route_distance(route):
         distance += data["distance_matrix"][route[i]][route[i + 1]]
     return distance
 
+def can_assign_to_vehicle(customer, route, vehicle_type, load, capacity, max_tour_length):
+    if vehicle_type == "CV" and data["residential"][customer - 1] == 1:
+        return False
+    if load + data["customers"][customer][2] > capacity:
+        return False
+    proposed_route = route + [customer, 0]
+    if calculate_route_distance(proposed_route) > max_tour_length:
+        return False
+    return True
+
 def initialize_data():
     data.update({
         "num_customers": n_customer_ev + n_customer_cv,
@@ -112,46 +129,8 @@ def initialize_data():
         for j in range(data["num_customers"] + 1):
             data["distance_matrix"][i][j] = calculate_distance(
                 data["customers"][i][0], data["customers"][i][1],
-                data["customers"][j][0], data["customers"][j][1]
-            )
+                data["customers"][j][0], data["customers"][j][1])
 
-# def create_initial_solution():
-#     routes = []
-#     route_types = []
-#     ev_cap = data["ev_capacity"]
-#     cv_cap = data["cv_capacity"]
-#     residential_customers = [i for i in range(1, data["num_customers"] + 1) if data["customers"][i][3] == 1]
-#     non_residential_customers = [i for i in range(1, data["num_customers"] + 1) if data["customers"][i][3] == 0]
-#     unassigned_evs = []
-#     assigned_customers = set() 
-
-#     def route_builder(vehicle_count, capacity, customer_list, vehicle_type="EV"):
-#         customer_index = 0
-#         for _ in range(vehicle_count):
-#             route = [0]
-#             load = 0
-#             while customer_index < len(customer_list) and load + data["customers"][customer_list[customer_index]][2] <= capacity:
-#                 customer = customer_list[customer_index]
-#                 if customer not in assigned_customers:
-#                     route.append(customer)
-#                     load += data["customers"][customer][2]
-#                     assigned_customers.add(customer)
-#                 customer_index += 1
-#             route.append(0)
-#             if len(route) > 2:
-#                 routes.append(route)
-#                 route_types.append(vehicle_type)
-#             else:
-#                 if vehicle_type == "EV":
-#                     unassigned_evs.append(route)
-    
-#     route_builder(data["ev_count"], ev_cap, residential_customers, vehicle_type="EV")
-#     remaining_non_residential_customers = [c for c in non_residential_customers if c not in assigned_customers]
-#     route_builder(len(unassigned_evs), ev_cap, remaining_non_residential_customers, vehicle_type="EV")
-#     remaining_non_residential_customers = [c for c in non_residential_customers if c not in assigned_customers]
-#     route_builder(data["cv_count"], cv_cap, remaining_non_residential_customers, vehicle_type="CV")
-#     return Solution(routes, [], route_types)
-# Modify create_initial_solution to respect max tour length for each vehicle type
 def create_initial_solution():
     routes = []
     route_types = []
@@ -161,14 +140,14 @@ def create_initial_solution():
     non_residential_customers = [i for i in range(1, data["num_customers"] + 1) if data["customers"][i][3] == 0]
     assigned_customers = set()
 
-    def route_builder(vehicle_count, capacity, customer_list, vehicle_type="EV", max_tour_length=0):
+    def route_builder(vehicle_count, capacity, customer_list, vehicle_type="EV", max_tour_length=0): 
         customer_index = 0
         for _ in range(vehicle_count):
             route = [0]
             load = 0
             while customer_index < len(customer_list) and load + data["customers"][customer_list[customer_index]][2] <= capacity:
                 customer = customer_list[customer_index]
-                proposed_route = route + [customer, 0]  # Tentatively add to check distance
+                proposed_route = route + [customer, 0]
                 if customer not in assigned_customers and calculate_route_distance(proposed_route) <= max_tour_length:
                     route.append(customer)
                     load += data["customers"][customer][2]
@@ -201,31 +180,6 @@ def remove_empty_routes(state):
     state.routes = [route for route in state.routes if len(route) > 2]
     return state
 
-# def greedy_repair(state, rng):
-#     repaired = state.copy()
-#     unassigned_customers = repaired.unassigned[:]
-    
-#     for customer in unassigned_customers:
-#         is_residential = data["residential"][customer - 1] == 1
-#         best_route, best_position, best_cost = None, None, float("inf")
-#         eligible_routes = []
-#         # Determine eligible routes based on customer type and route type
-#         for route, vehicle_type in zip(repaired.routes, repaired.route_types):
-#             if vehicle_type == "EV" or (vehicle_type == "CV" and not is_residential):
-#                 eligible_routes.append((route, vehicle_type))
-#         # Now find the best insertion position within eligible routes
-#         for route, vehicle_type in eligible_routes:
-#             for position in range(1, len(route)):
-#                 new_route = route[:position] + [customer] + route[position:]
-#                 new_cost = calculate_route_distance(new_route)
-#                 if new_cost < best_cost:
-#                     best_route, best_position, best_cost = route, position, new_cost
-#         # Insert the customer into the best position found
-#         if best_route is not None:
-#             best_route.insert(best_position, customer)
-#             repaired.unassigned.remove(customer)
-#     return repaired
-# Update greedy_repair to respect max tour lengths
 def greedy_repair(state, rng):
     repaired = state.copy()
     unassigned_customers = repaired.unassigned[:]
@@ -277,25 +231,6 @@ def worst_removal(state, rng):
             route.remove(customer)
     return remove_empty_routes(destroyed)
 
-# def random_insert(state, rng):
-#     repaired = state.copy()
-#     unassigned_customers = repaired.unassigned[:]
-#     rng.shuffle(unassigned_customers)
-#     for customer in unassigned_customers:
-#         best_route, best_position, best_cost = None, None, float("inf")
-#         eligible_routes = [route for route in repaired.routes if can_assign_to_vehicle(route, customer)]
-        
-#         for route in eligible_routes:
-#             for position in range(1, len(route)):
-#                 new_route = route[:position] + [customer] + route[position:]
-#                 new_cost = calculate_route_distance(new_route)
-#                 if new_cost < best_cost:
-#                     best_route, best_position, best_cost = route, position, new_cost
-#         if best_route is not None:
-#             best_route.insert(best_position, customer)
-#             repaired.unassigned.remove(customer)
-#     return repaired
-# Update random_insert to respect max tour lengths
 def random_insert(state, rng):
     repaired = state.copy()
     unassigned_customers = repaired.unassigned[:]
@@ -360,5 +295,6 @@ print(f"Repair operator: {best_configuration[1]}")
 print(f"Acceptance criterion: {best_configuration[2]}")
 print(f"Best objective value: {best_objective_value:.2f}")
 display_solution(best_solution)
+# save_solution_to_file(best_solution, best_objective_value, filename="cpp_output_total.txt")
+# print(f"\nSolution saved to 'cpp_output_total.txt'.")
 plot_routes(best_solution)
-
